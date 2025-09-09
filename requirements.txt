@@ -1,0 +1,5 @@
+transformers
+datasets
+torch
+flask
+numpy<2
