@@ -94,7 +94,6 @@ fi
 rsync_args=(
   -azP
   --human-readable
-  --filter=':- .gitignore'
   --exclude=.DS_Store
   --exclude=**/__pycache__/
   --exclude=.pytest_cache/

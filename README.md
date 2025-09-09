@@ -21,12 +21,13 @@ pip install -r requirements.txt
 
 #### Compute and visualize token entropies
 
+Example: 
 ```bash
 # compute entropy at each token position
-python compute_entropy.py --output entropies.jsonl --split validation --subset en --text-field text --max-length 1024 --batch-size 4 --max-samples 50 --model mistralai/Mistral-7B-v0.1
+python compute_entropy.py --output entropies_mistral7b.jsonl --split validation --subset en --text-field text --max-length 1024 --batch-size 4 --max-samples 50 --model mistralai/Mistral-7B-v0.1
 
 # visualize the entropies on a web page. darker color means the token position has higher entropy (i.e., given the text before the highlighted position, the model is more uncertain about predicting the current position).
-python visualize_entropies.py --file entropies.jsonl --model mistralai/Mistral-7B-v0.1 --port 7860 --host 127.0.0.1 --n 20
+python visualize_entropies.py --file entropies_mistral7b.jsonl --model mistralai/Mistral-7B-v0.1 --port 7860 --host 127.0.0.1 --n 20
 ```
 
 ### Workflow 

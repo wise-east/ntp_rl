@@ -43,7 +43,7 @@ HTML_PAGE = """
         <div class="line">
           {% for span in item.spans %}
             {% if span[2] > 0 %}
-              <span class="token" title="H={{ '%.3f' % span[2] }}" style="background-color: rgba(255, 0, 0, {{ span[3] }});">{{ span[1] }}</span>
+              <span class="token" title="H={{ '%.3f' % span[2] }} | Greedy='{{ span[4] }}'" style="background-color: rgba(255, 0, 0, {{ span[3] }});">{{ span[1] }}</span>
             {% else %}
               <span>{{ span[1] }}</span>
             {% endif %}
@@ -71,6 +71,7 @@ def build_spans(record: Dict[str, Any], tokenizer, max_entropy: float) -> Dict[s
     tokens: List[str] = record.get("tokens", [])
     entropies: List[float] = record.get("entropy", [])
     offsets: List[List[int]] = record.get("offsets", [])
+    pred_tokens: List[str] = record.get("pred_tokens", [""] * len(entropies))
 
     # If offsets are missing or mismatched, fall back to re-tokenization
     if not offsets or len(offsets) != len(entropies):
@@ -80,17 +81,18 @@ def build_spans(record: Dict[str, Any], tokenizer, max_entropy: float) -> Dict[s
 
     spans = []
     nonzero_count = 0
-    length = min(len(tokens), len(entropies), len(offsets))
+    length = min(len(tokens), len(entropies), len(offsets), len(pred_tokens))
     for idx in range(length):
         start, end = offsets[idx]
         piece = text[start:end]
         h = float(entropies[idx])
+        greedy = pred_tokens[idx] if idx < len(pred_tokens) else ""
         if h <= 0.0 or piece == "":
-            spans.append((idx, piece, 0.0, 0.0))
+            spans.append((idx, piece, 0.0, 0.0, greedy))
             continue
         nonzero_count += 1
         alpha = 0.15 + 0.85 * min(h / max_entropy if max_entropy > 0 else 0.0, 1.0)
-        spans.append((idx, piece, h, alpha))
+        spans.append((idx, piece, h, alpha, greedy))
 
     return {
         "tokens": tokens,

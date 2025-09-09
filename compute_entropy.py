@@ -27,12 +27,12 @@ class Args:
 
 
 def parse_args() -> Args:
-    parser = argparse.ArgumentParser(description="Compute per-token entropy with Mistral 7B over C4 samples")
+    parser = argparse.ArgumentParser(description="Compute per-token entropy with a model over C4 samples")
     parser.add_argument("--output", dest="output_path", type=str, required=True, help="Path to write JSONL results")
     parser.add_argument("--split", type=str, default="validation", help="Dataset split (e.g., validation)")
     parser.add_argument("--subset", type=str, default="en", help="Dataset subset, e.g., en")
     parser.add_argument("--text-field", type=str, default="text", help="Field name with raw text")
-    parser.add_argument("--max-length", type=int, default=1024, help="Truncate/pad sequences to this length")
+    parser.add_argument("--max-length", type=int, default=4096, help="Truncate/pad sequences to this length")
     parser.add_argument("--batch-size", type=int, default=4, help="Batch size of texts")
     parser.add_argument("--max-samples", type=int, default=50, help="Max number of samples to process")
     parser.add_argument("--model", dest="model_name", type=str, default="mistralai/Mistral-7B-v0.1", help="HF model name")
@@ -147,7 +147,8 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         
-    # Keep tokenizer padding_side as-is; downstream logic is padding-agnostic
+    # set padding side to right 
+    tokenizer.padding_side = "right"
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
@@ -180,36 +181,50 @@ def main() -> None:
                 # Shift logits to align with labels (predict token t from logits at t-1)
                 logits = out.logits  # [B, T, V]
 
+            # Greedy next-token predictions per position (before shifting alignment)
+            pred_ids_all = torch.argmax(logits, dim=-1)  # [B, T]
             entropies = compute_token_entropies(logits, attention_mask)
             # Build per-sample outputs with tokens and offsets aligned to entropies.
-            for text, ids, mask, seq_ent in zip(batch_texts, input_ids, attention_mask, entropies):
+            for b_idx, (text, ids, mask, seq_ent) in enumerate(zip(batch_texts, input_ids, attention_mask, entropies)):
                 
                 # Tokenize raw text to obtain offsets (no special tokens)
-                enc_off = tokenizer(text, return_offsets_mapping=True, add_special_tokens=False, max_length=max_length, truncation=True)
+                enc_off = tokenizer(text, return_offsets_mapping=True, add_special_tokens=False)
                 pieces_ids = enc_off["input_ids"]
                 pieces = tokenizer.convert_ids_to_tokens(pieces_ids)
                 offsets = enc_off["offset_mapping"]
 
-                if len(seq_ent) != len(pieces):
-                    print(f"Number of entropies: {len(seq_ent)}, Number of pieces: {len(pieces)}")
-                    breakpoint()
-
-                L = min(len(seq_ent), len(pieces))
-                if L <= 0:
-                    record = {"text": text, "tokens": [], "entropy": [], "offsets": []}
+                # Predicted next token strings aligned to entropy positions (non-pad span, excluding last token)
+                nonpad_idx = (mask > 0).nonzero(as_tuple=False).squeeze(-1)
+                if nonpad_idx.numel() <= 1 or len(seq_ent) == 0:
+                    record = {"text": text, "tokens": [], "entropy": [], "offsets": [], "pred_tokens": []}
                     fout.write(json.dumps(record) + "\n")
                     continue
+                start = int(nonpad_idx[0].item())
+                last = int(nonpad_idx[-1].item())
+                pred_ids_seq = pred_ids_all[b_idx, start:last].tolist()  # length == len(seq_ent)
+                pred_tokens_seq = tokenizer.convert_ids_to_tokens(pred_ids_seq)
 
-                # Align from the end to be robust to BOS or other specials in model input
-                tokens = pieces[-L:]
-                aligned_offsets = offsets[-L:]
-                aligned_entropy = seq_ent[-L:]
+                seq_len = len(seq_ent)
+                pieces_len = len(pieces)
+
+                # Use BOS presence to handle off-by-one:
+                # - If tokenizer.bos_token is None (e.g., Qwen), predictions correspond to tokens[1:]
+                #   so add 0 entropy to the first token
+                if getattr(tokenizer, "bos_token", None) is None and pieces_len == seq_len + 1:
+                    seq_ent = [0.0] + seq_ent
+
+                final_len = min(pieces_len, seq_len)
+                tokens = pieces[:final_len]
+                aligned_offsets = offsets[:final_len]
+                aligned_entropy = seq_ent[:final_len]
+                aligned_pred_tokens = pred_tokens_seq[:final_len]
 
                 record = {
                     "text": text,
                     "tokens": tokens,
                     "entropy": aligned_entropy,
                     "offsets": aligned_offsets,
+                    "pred_tokens": aligned_pred_tokens,
                 }
                 fout.write(json.dumps(record) + "\n")
 
