@@ -3,58 +3,10 @@ import json
 import os
 from typing import List, Dict, Any
 
-from flask import Flask, render_template_string, request, redirect, url_for
+from flask import Flask, render_template, request, redirect, url_for
 from transformers import AutoTokenizer
-
-
-HTML_PAGE = """
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Entropy Visualizer</title>
-    <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; }
-      .sample { margin-bottom: 32px; }
-      .token { padding: 1px 2px; border-radius: 2px; }
-      .controls { margin-bottom: 16px; }
-      .legend { margin-top: 8px; font-size: 12px; color: #555; }
-      .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
-      textarea { width: 100%; height: 100px; }
-      .meta { color: #666; font-size: 12px; }
-      .line { margin: 12px 0; line-height: 1.8; }
-    </style>
-  </head>
-  <body>
-    <h2>Entropy Visualizer</h2>
-    <div class="controls">
-      <form method="get" action="/">
-        <label>JSONL File: <input type="text" name="file" value="{{ jsonl_path }}" size="60"></label>
-        <label style="margin-left: 12px;">Max Samples: <input type="number" name="n" value="{{ max_n }}" min="1"></label>
-        <label style="margin-left: 12px;">Model: <input type="text" name="model" value="{{ model_name }}" size="40"></label>
-        <button type="submit">Load</button>
-      </form>
-      <div class="legend">Darker background = higher entropy. Zero-entropy and padded tokens are hidden.</div>
-    </div>
-
-    {% for item in items %}
-      <div class="sample">
-        <div class="meta">Sample {{ loop.index }} | Tokens: {{ item.tokens|length }} | Nonzero entropies: {{ item.nonzero_count }}</div>
-        <div class="line">
-          {% for span in item.spans %}
-            {% if span[2] > 0 %}
-              <span class="token" title="H={{ '%.3f' % span[2] }} | Greedy='{{ span[4] }}'" style="background-color: rgba(255, 0, 0, {{ span[3] }});">{{ span[1] }}</span>
-            {% else %}
-              <span>{{ span[1] }}</span>
-            {% endif %}
-          {% endfor %}
-        </div>
-      </div>
-    {% endfor %}
-  </body>
-  </html>
-"""
-
+from loguru import logger
+import numpy as np
 
 def load_jsonl(path: str, max_n: int) -> List[Dict[str, Any]]:
     data = []
@@ -64,6 +16,48 @@ def load_jsonl(path: str, max_n: int) -> List[Dict[str, Any]]:
                 break
             data.append(json.loads(line))
     return data
+
+def compute_correlation_between_entropy_and_accuracy(records: List[Dict[str, Any]], accuracies: List[int]) -> float:
+    entropies = []
+    for r in records:
+        entropies.extend(r.get("entropy", []))
+    # remove 0s from entropies  
+    entropies = [e for e in entropies if e != 0]
+    return np.corrcoef(entropies, accuracies)[0, 1]
+
+def compute_correlation_between_entropy_and_index_position(records: List[Dict[str, Any]]) -> float:
+    entropies = []
+    for r in records:
+        entropies.extend(r.get("entropy", []))
+    return np.corrcoef(entropies, np.arange(len(entropies)))[0, 1]
+
+def compute_overall_accuracy(records: List[Dict[str, Any]]) -> tuple[int, int]:
+    correct = 0
+    total = 0
+    accuracies = []
+    for r in records:
+        gt = r.get("tokens") or []
+        pred = r.get("pred_tokens") or []
+        L = min(len(gt), len(pred))
+        logger.info(f"gt: {len(gt)}, pred: {len(pred)}, L: {L}")
+        # models such as qwen don't add a bos token, so there is no prediction for the first token. therefore right align the predictions.
+        gt = gt[-L:]
+        pred = pred[-L:]
+        for i in range(L):
+            if pred[i] == gt[i]:
+                correct += 1
+                accuracies.append(1)
+            else:
+                accuracies.append(0)
+            total += 1
+    return correct, total, accuracies
+
+
+def compute_average_loss(records: List[Dict[str, Any]]):
+    vals = [r.get("loss") for r in records if r.get("loss") is not None]
+    if not vals:
+        return None
+    return float(sum(vals) / len(vals))
 
 
 def build_spans(record: Dict[str, Any], tokenizer, max_entropy: float) -> Dict[str, Any]:
@@ -81,18 +75,26 @@ def build_spans(record: Dict[str, Any], tokenizer, max_entropy: float) -> Dict[s
 
     spans = []
     nonzero_count = 0
-    length = min(len(tokens), len(entropies), len(offsets), len(pred_tokens))
+    length = len(tokens)
+    logger.info(f"length of tokens: {len(tokens)}, length of entropies: {len(entropies)}, length of offsets: {len(offsets)}, length of pred_tokens: {len(pred_tokens)}")
+    
+    if len(tokens) == len(pred_tokens) + 1:
+        pred_tokens = ["DUMMY"] + pred_tokens
+     
     for idx in range(length):
         start, end = offsets[idx]
         piece = text[start:end]
         h = float(entropies[idx])
         greedy = pred_tokens[idx] if idx < len(pred_tokens) else ""
+        mismatch = (idx < len(tokens) and idx < len(pred_tokens) and tokens[idx] != pred_tokens[idx]) 
+        # if the prediction is a dummy token, then the mismatch is always False 
+        mismatch = mismatch and pred_tokens[idx] != "DUMMY"
         if h <= 0.0 or piece == "":
-            spans.append((idx, piece, 0.0, 0.0, greedy))
+            spans.append((idx, piece, 0.0, 0.0, greedy, mismatch))
             continue
         nonzero_count += 1
         alpha = 0.15 + 0.85 * min(h / max_entropy if max_entropy > 0 else 0.0, 1.0)
-        spans.append((idx, piece, h, alpha, greedy))
+        spans.append((idx, piece, h, alpha, greedy, mismatch))
 
     return {
         "tokens": tokens,
@@ -123,16 +125,28 @@ def create_app(jsonl_path: str, model_name: str, max_n: int) -> Flask:
             if r.get("entropy"):
                 max_entropy = max(max_entropy, max([float(x) for x in r["entropy"]] or [0.0]))
 
+        correct, total, accuracies = compute_overall_accuracy(records)
+        entropy_acc_correlation = compute_correlation_between_entropy_and_accuracy(records, accuracies)
+        entropy_index_correlation = compute_correlation_between_entropy_and_index_position(records)
+        accuracy = (correct / total * 100.0) if total else None
+        avg_loss = compute_average_loss(records)
+
         items = [build_spans(r, tokenizer, max_entropy) for r in records]
-        return render_template_string(
-            HTML_PAGE,
+        return render_template(
+            "entropy.html",
             items=items,
             jsonl_path=path,
             model_name=model,
             max_n=n,
+            accuracy=accuracy,
+            correct=correct,
+            total=total,
+            entropy_index_correlation=entropy_index_correlation,
+            entropy_acc_correlation=entropy_acc_correlation,
+            avg_loss=avg_loss,
         )
-
-    return app
+        
+    return app 
 
 
 def main():

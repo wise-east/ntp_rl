@@ -183,6 +183,12 @@ def main() -> None:
 
             # Greedy next-token predictions per position (before shifting alignment)
             pred_ids_all = torch.argmax(logits, dim=-1)  # [B, T]
+            # Per-position negative log-likelihood for the next token
+            log_probs_full = torch.log_softmax(logits.float(), dim=-1)  # [B, T, V]
+            target_ids = input_ids[:, 1:]  # [B, T-1]
+            log_probs_trunc = log_probs_full[:, :-1, :]  # [B, T-1, V]
+            nll_trunc = -log_probs_trunc.gather(-1, target_ids.unsqueeze(-1)).squeeze(-1)  # [B, T-1]
+
             entropies = compute_token_entropies(logits, attention_mask)
             # Build per-sample outputs with tokens and offsets aligned to entropies.
             for b_idx, (text, ids, mask, seq_ent) in enumerate(zip(batch_texts, input_ids, attention_mask, entropies)):
@@ -195,10 +201,6 @@ def main() -> None:
 
                 # Predicted next token strings aligned to entropy positions (non-pad span, excluding last token)
                 nonpad_idx = (mask > 0).nonzero(as_tuple=False).squeeze(-1)
-                if nonpad_idx.numel() <= 1 or len(seq_ent) == 0:
-                    record = {"text": text, "tokens": [], "entropy": [], "offsets": [], "pred_tokens": []}
-                    fout.write(json.dumps(record) + "\n")
-                    continue
                 start = int(nonpad_idx[0].item())
                 last = int(nonpad_idx[-1].item())
                 pred_ids_seq = pred_ids_all[b_idx, start:last].tolist()  # length == len(seq_ent)
@@ -213,18 +215,20 @@ def main() -> None:
                 if getattr(tokenizer, "bos_token", None) is None and pieces_len == seq_len + 1:
                     seq_ent = [0.0] + seq_ent
 
-                final_len = min(pieces_len, seq_len)
-                tokens = pieces[:final_len]
-                aligned_offsets = offsets[:final_len]
-                aligned_entropy = seq_ent[:final_len]
-                aligned_pred_tokens = pred_tokens_seq[:final_len]
+                tokens = pieces
+
+                # Compute per-sample average loss over predictor positions (exclude padding)
+                nll_seq = nll_trunc[b_idx]
+                nll_predictors = nll_seq[start:last]
+                sample_loss = float(nll_predictors.mean().item()) if nll_predictors.numel() > 0 else None
 
                 record = {
                     "text": text,
                     "tokens": tokens,
-                    "entropy": aligned_entropy,
-                    "offsets": aligned_offsets,
-                    "pred_tokens": aligned_pred_tokens,
+                    "entropy": seq_ent,
+                    "offsets": offsets,
+                    "pred_tokens": pred_tokens_seq,
+                    "loss": sample_loss,
                 }
                 fout.write(json.dumps(record) + "\n")
 

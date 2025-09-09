@@ -1,0 +1,87 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Entropy Visualizer</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; }
+      .sample { margin-bottom: 32px; }
+      .token { padding: 1px 2px; border-radius: 2px; }
+      .token-wrapper { position: relative; display: inline-block; }
+      .tip {
+        position: absolute;
+        bottom: 100%;
+        left: 0;
+        transform: translateY(-4px);
+        background: rgba(0,0,0,0.85);
+        color: #fff;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 12px;
+        white-space: nowrap;
+        visibility: hidden;
+        opacity: 0;
+        transition: opacity 0.05s linear;
+        z-index: 10;
+      }
+      .token-wrapper:hover .tip { visibility: visible; opacity: 1; }
+      .controls { margin-bottom: 16px; }
+      .legend { margin-top: 8px; font-size: 12px; color: #555; }
+      .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
+      textarea { width: 100%; height: 100px; }
+      .meta { color: #666; font-size: 12px; }
+      .line { margin: 12px 0; line-height: 1.8; }
+    </style>
+  </head>
+  <body>
+    <h2>Entropy Visualizer</h2>
+    <div class="controls">
+      <form method="get" action="/">
+        <label>JSONL File: <input type="text" name="file" value="{{ jsonl_path }}" size="60"></label>
+        <label style="margin-left: 12px;">Max Samples: <input type="number" name="n" value="{{ max_n }}" min="1"></label>
+        <label style="margin-left: 12px;">Model: <input type="text" name="model" value="{{ model_name }}" size="40"></label>
+        <button type="submit">Load</button>
+      </form>
+      <div class="legend">Darker background = higher entropy.</div>
+    </div>
+
+    {% if accuracy is not none %}
+      <h3>
+        Overall next-token accuracy: {{ '%.2f' % accuracy }}% ({{ correct }}/{{ total }})
+        {% if avg_loss is not none %}
+          · Average loss: {{ '%.4f' % avg_loss }}
+        {% endif %}
+      </h3>
+    {% endif %}
+
+    {% if entropy_index_correlation is not none %}
+      <h3>
+        Correlation between entropy and index position: {{ '%.3f' % entropy_index_correlation }}
+        {% if entropy_acc_correlation is not none %}
+          · Correlation between entropy and accuracy: {{ '%.3f' % entropy_acc_correlation }}
+        {% endif %}
+      </h3>
+    {% endif %}
+
+    {% for item in items %}
+      <div class="sample">
+        <div class="meta">Sample {{ loop.index }} | Tokens: {{ item.tokens|length }} | Nonzero entropies: {{ item.nonzero_count }}</div>
+        <div class="line">
+          {% for span in item.spans %}
+            {% set underline = 'underline' if span[5] else 'none' %}
+            <span class="token-wrapper" style="text-decoration: {{ underline }};">
+              {% if span[2] > 0 %}
+                <span class="token" style="background-color: rgba(255, 0, 0, {{ span[3] }});">{{ span[1] }}</span>
+              {% else %}
+                <span>{{ span[1] }}</span>
+              {% endif %}
+              <span class="tip">H={{ '%.3f' % span[2] }} | Greedy='{{ span[4] }}'</span>
+            </span>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  </body>
+  </html>
+
+
