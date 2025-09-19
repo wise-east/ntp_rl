@@ -6,7 +6,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 import time
-from compute_entropy import compute_token_entropies, batched
+from compute_entropy import compute_token_entropies, batched, load_data
 import json
 from loguru import logger
 from tqdm import tqdm
@@ -15,11 +15,12 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_idx", type=int, default=0)
 parser.add_argument("--baseline", action="store_true")
-parser.add_argument("--batch_size", type=int, default=8)
+parser.add_argument("--batch-size", type=int, default=4)
 parser.add_argument("--temp", type=float, default=0.9)
 parser.add_argument("--output", type=str, default="entropies_quietstar.jsonl")
 parser.add_argument("--model", type=str, default="mistralai/Mistral-7B-v0.1")
 parser.add_argument("--max_samples", type=int, default=50)
+parser.add_argument("--max-length", type=int, default=1024)
 parser.add_argument("--dataset", type=str, default="allenai/c4")
 parser.add_argument("--split", type=str, default="validation")
 parser.add_argument("--subset", type=str, default="en")
@@ -100,13 +101,12 @@ def quietstar_init(params):
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = quietstar_init(None)
-ds = load_dataset(args.dataset, args.subset, split=args.split, streaming=True)
-samples = [next(iter(ds))[args.text_field] for _ in range(args.max_samples)] 
+samples = load_data(args)
 
 model.eval()
 
 with open(output_path, "w", encoding="utf-8") as f:
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch_texts in tqdm(batched(samples, args.batch_size), total=(len(samples) + args.batch_size - 1)//args.batch_size):
             # Encode batch
             enc = model.tokenizer(
@@ -114,7 +114,7 @@ with open(output_path, "w", encoding="utf-8") as f:
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=4096,
+                max_length=args.max_length,
             )
             attention_mask = enc.attention_mask.to(model.device)
             input_ids = enc.input_ids.to(model.device)

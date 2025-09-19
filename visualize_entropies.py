@@ -90,7 +90,13 @@ def build_spans(record: Dict[str, Any], tokenizer, max_entropy: float) -> Dict[s
     if len(tokens) == len(pred_tokens) + 1:
         pred_tokens = ["DUMMY"] + pred_tokens
      
-    for idx in range(length):
+    # entropies may be less than number of tokens if max_length is < length of the text. truncate the tokens and entropies to the same length.
+    if len(entropies) < length:
+        tokens = tokens[:len(entropies)]
+        offsets = offsets[:len(entropies)]
+        
+        
+    for idx in range(len(entropies)):
         start, end = offsets[idx]
         piece = text[start:end]
         h = float(entropies[idx])
