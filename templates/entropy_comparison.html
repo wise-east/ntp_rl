@@ -1,0 +1,170 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Entropy Comparison</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; }
+      .controls { margin-bottom: 16px; }
+      .legend { margin-top: 8px; font-size: 12px; color: #555; }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+      .sample { margin-bottom: 28px; }
+      .col { border: 1px solid #eee; border-radius: 6px; padding: 12px; }
+      .header { font-weight: 600; margin-bottom: 8px; color: #333; }
+      .line { margin: 8px 0; line-height: 1.8; }
+      .segment { padding: 1px 2px; border-radius: 2px; }
+      .segment-wrapper { position: relative; display: inline-block; }
+      .tip {
+        position: absolute;
+        bottom: 100%;
+        left: 0;
+        transform: translateY(-4px);
+        background: rgba(0,0,0,0.85);
+        color: #fff;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 12px;
+        white-space: nowrap;
+        visibility: hidden;
+        opacity: 0;
+        transition: opacity 0.05s linear;
+        z-index: 10;
+      }
+      .segment-wrapper:hover .tip { visibility: visible; opacity: 1; }
+      textarea { width: 100%; height: 90px; }
+      .meta { color: #666; font-size: 12px; margin-bottom: 8px; }
+      .legend-colors { margin-top: 8px; font-size: 12px; color: #555; }
+      .legend-swatches { display: inline-block; margin-left: 8px; vertical-align: middle; }
+      .swatch { display: inline-block; width: 14px; height: 14px; margin-right: 4px; border-radius: 2px; border: 1px solid rgba(0,0,0,0.1); }
+    </style>
+  </head>
+  <body>
+    <h2>Entropy Comparison</h2>
+    <div class="controls">
+      <form method="get" action="/">
+        <label>Left JSONL:
+          <select name="left">
+            {% if left_path and (available_files is defined) and (left_path not in available_files) %}
+              <option value="{{ left_path }}" selected>(custom) {{ left_path }}</option>
+            {% endif %}
+            {% if available_files %}
+              {% for f in available_files %}
+                <option value="{{ f }}" {% if f == left_path %}selected{% endif %}>{{ f }}</option>
+              {% endfor %}
+            {% else %}
+              <option value="" selected disabled>No matching files found</option>
+            {% endif %}
+          </select>
+        </label>
+        <label style="margin-left: 12px;">Right JSONL:
+          <select name="right">
+            {% if right_path and (available_files is defined) and (right_path not in available_files) %}
+              <option value="{{ right_path }}" selected>(custom) {{ right_path }}</option>
+            {% endif %}
+            {% if available_files %}
+              {% for f in available_files %}
+                <option value="{{ f }}" {% if f == right_path %}selected{% endif %}>{{ f }}</option>
+              {% endfor %}
+            {% else %}
+              <option value="" selected disabled>No matching files found</option>
+            {% endif %}
+          </select>
+        </label>
+        <input type="hidden" name="idx" value="{{ idx|default(0) }}" />
+        <button type="submit">Load</button>
+      </form>
+      {% if available_files %}
+        <div class="legend">Found {{ available_files|length }} files matching entropies_*.jsonl</div>
+      {% endif %}
+      <div class="legend">Red = left entropy higher than right; Green = left lower than right. Opacity scales with |ΔH|.</div>
+      <div class="legend" style="margin-top: 6px;">
+        Index: {{ (idx|default(0)) + 1 }} / {{ total|default(0) }}
+        <span style="margin-left: 8px;">
+          <a id="prevLink" href="/?left={{ left_path }}&right={{ right_path }}&idx={{ (idx|default(0)) - 1 }}" style="margin-right:8px;">⬅ Prev</a>
+          <a id="nextLink" href="/?left={{ left_path }}&right={{ right_path }}&idx={{ (idx|default(0)) + 1 }}">Next ➡</a>
+        </span>
+      </div>
+      <div class="legend-colors">Examples:
+        <span class="legend-swatches">
+          <span class="swatch" style="background: rgba(255,0,0,0.2)"></span>
+          <span class="swatch" style="background: rgba(255,0,0,0.5)"></span>
+          <span class="swatch" style="background: rgba(0,128,0,0.2)"></span>
+          <span class="swatch" style="background: rgba(0,128,0,0.5)"></span>
+        </span>
+      </div>
+    </div>
+
+    {% for pair in items %}
+      <div class="sample">
+        <div class="meta">Sample {{ loop.index }} | Text length: {{ pair.text|length }} | Segments: {{ pair.segments|length }}</div>
+        <div class="row">
+          <div class="col">
+            <div class="header">Left</div>
+            <div class="line">
+              {% for seg in pair.segments %}
+                {% set bg = seg.left_bg %}
+                <span class="segment-wrapper" data-key="{{ pair.key }}-{{ seg.idx }}">
+                  {% if bg %}
+                    <span class="segment" style="background-color: {{ bg }};">{{ seg.text }}</span>
+                  {% else %}
+                    <span>{{ seg.text }}</span>
+                  {% endif %}
+                  <span class="tip">L H={{ '%.3f' % seg.left_h }} | R H={{ '%.3f' % seg.right_h }} | Δ={{ '%.3f' % seg.diff }}</span>
+                </span>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="col">
+            <div class="header">Right</div>
+            <div class="line">
+              {% for seg in pair.segments %}
+                {% set bg = seg.right_bg %}
+                <span class="segment-wrapper" data-key="{{ pair.key }}-{{ seg.idx }}">
+                  {% if bg %}
+                    <span class="segment" style="background-color: {{ bg }};">{{ seg.text }}</span>
+                  {% else %}
+                    <span>{{ seg.text }}</span>
+                  {% endif %}
+                  <span class="tip">R H={{ '%.3f' % seg.right_h }} | L H={{ '%.3f' % seg.left_h }} | Δ={{ '%.3f' % seg.diff }}</span>
+                </span>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+
+    <script>
+      // Synchronize hover tooltips across both sides per segment key
+      document.addEventListener('mouseover', (e) => {
+        const wrapper = e.target.closest('.segment-wrapper');
+        if (!wrapper) return;
+        const key = wrapper.getAttribute('data-key');
+        if (!key) return;
+        const siblings = document.querySelectorAll('.segment-wrapper[data-key="' + key + '"] .tip');
+        siblings.forEach(tip => { tip.style.visibility = 'visible'; tip.style.opacity = '1'; });
+      });
+      document.addEventListener('mouseout', (e) => {
+        const wrapper = e.target.closest('.segment-wrapper');
+        if (!wrapper) return;
+        const key = wrapper.getAttribute('data-key');
+        if (!key) return;
+        const siblings = document.querySelectorAll('.segment-wrapper[data-key="' + key + '"] .tip');
+        siblings.forEach(tip => { tip.style.visibility = 'hidden'; tip.style.opacity = '0'; });
+      });
+
+      // Keyboard navigation with arrow keys
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowLeft') {
+          const prev = document.getElementById('prevLink');
+          if (prev) window.location.href = prev.getAttribute('href');
+        } else if (e.key === 'ArrowRight') {
+          const next = document.getElementById('nextLink');
+          if (next) window.location.href = next.getAttribute('href');
+        }
+      });
+    </script>
+  </body>
+  </html>
+
+
