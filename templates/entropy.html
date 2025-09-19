@@ -37,11 +37,27 @@
     <h2>Entropy Visualizer</h2>
     <div class="controls">
       <form method="get" action="/">
-        <label>JSONL File: <input type="text" name="file" value="{{ jsonl_path }}" size="60"></label>
+        <label>JSONL File:
+          <select name="file">
+            {% if jsonl_path and (available_files is defined) and (jsonl_path not in available_files) %}
+              <option value="{{ jsonl_path }}" selected>(custom) {{ jsonl_path }}</option>
+            {% endif %}
+            {% if available_files %}
+              {% for f in available_files %}
+                <option value="{{ f }}" {% if f == jsonl_path %}selected{% endif %}>{{ f }}</option>
+              {% endfor %}
+            {% else %}
+              <option value="" selected disabled>No matching files found</option>
+            {% endif %}
+          </select>
+        </label>
         <label style="margin-left: 12px;">Max Samples: <input type="number" name="n" value="{{ max_n }}" min="1"></label>
         <label style="margin-left: 12px;">Model: <input type="text" name="model" value="{{ model_name }}" size="40"></label>
         <button type="submit">Load</button>
       </form>
+      {% if available_files %}
+        <div class="legend">Found {{ available_files|length }} files matching entropies_*.jsonl</div>
+      {% endif %}
       <div class="legend">Darker background = higher entropy.</div>
     </div>
 
@@ -75,7 +91,7 @@
               {% else %}
                 <span>{{ span[1] }}</span>
               {% endif %}
-              <span class="tip">H={{ '%.3f' % span[2] }} | Greedy='{{ span[4] }}'</span>
+              <span class="tip">H={{ '%.3f' % span[2] }} | Greedy='{{ span[4] }}' | Sequential thoughts='{{ span[6] }}'</span>
             </span>
           {% endfor %}
         </div>

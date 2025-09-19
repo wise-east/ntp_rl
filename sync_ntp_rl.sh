@@ -102,6 +102,9 @@ rsync_args=(
   --exclude=venv/
   --exclude=.env
   --exclude=.conda/
+  --include=requirements-quietstar.txt
+  --include=requirements.txt
+  --exclude=*.txt
 )
 
 if [[ "$enable_delete" == true ]]; then

@@ -1,12 +1,20 @@
 import argparse
 import json
 import os
-from typing import List, Dict, Any
+import glob
+from typing import List, Dict, Any, Optional
+from pathlib import Path
 
 from flask import Flask, render_template, request, redirect, url_for
 from transformers import AutoTokenizer
 from loguru import logger
 import numpy as np
+
+MODEL_MAPPING = {
+    "Mistral-7B-v0.1": "mistralai/Mistral-7B-v0.1",
+    "Qwen2.5-7B": "Qwen/Qwen2.5-7B",
+    "quietstar": "mistralai/Mistral-7B-v0.1",
+}
 
 def load_jsonl(path: str, max_n: int) -> List[Dict[str, Any]]:
     data = []
@@ -66,6 +74,7 @@ def build_spans(record: Dict[str, Any], tokenizer, max_entropy: float) -> Dict[s
     entropies: List[float] = record.get("entropy", [])
     offsets: List[List[int]] = record.get("offsets", [])
     pred_tokens: List[str] = record.get("pred_tokens", [""] * len(entropies))
+    sequential_thought_tokens: List[str] = record.get("sequential_thought_tokens", [])
 
     # If offsets are missing or mismatched, fall back to re-tokenization
     if not offsets or len(offsets) != len(entropies):
@@ -94,7 +103,9 @@ def build_spans(record: Dict[str, Any], tokenizer, max_entropy: float) -> Dict[s
             continue
         nonzero_count += 1
         alpha = 0.15 + 0.85 * min(h / max_entropy if max_entropy > 0 else 0.0, 1.0)
-        spans.append((idx, piece, h, alpha, greedy, mismatch))
+        sequential_thoughts = sequential_thought_tokens[idx] if idx < len(sequential_thought_tokens) else ""
+        
+        spans.append((idx, piece, h, alpha, greedy, mismatch, sequential_thoughts))
 
     return {
         "tokens": tokens,
@@ -103,13 +114,26 @@ def build_spans(record: Dict[str, Any], tokenizer, max_entropy: float) -> Dict[s
     }
 
 
-def create_app(jsonl_path: str, model_name: str, max_n: int) -> Flask:
+def discover_jsonl_files(directory: str) -> List[str]:
+    pattern = os.path.join(directory, "entropies_*.jsonl")
+    files = sorted(glob.glob(pattern))
+    return files
+
+
+def create_app(jsonl_path: Optional[str], model_name: str, max_n: int) -> Flask:
     app = Flask(__name__)
+    # Discover available files each request so newly created files appear
+    available_files = discover_jsonl_files(os.getcwd())
+    default_path = jsonl_path or (available_files[0] if available_files else "")
+    if model_name is None:
+        model_name = Path(default_path).stem.split("_")[1].split("_")[0] if default_path else None
+        model_name = MODEL_MAPPING[model_name]
+
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
 
     @app.route("/")
     def index():
-        path = request.args.get("file", jsonl_path)
+        path = request.args.get("file", default_path)
         n = int(request.args.get("n", max_n))
         model = request.args.get("model", model_name)
 
@@ -118,7 +142,10 @@ def create_app(jsonl_path: str, model_name: str, max_n: int) -> Flask:
         if model != model_name:
             tokenizer = AutoTokenizer.from_pretrained(model, use_fast=True)
 
-        records = load_jsonl(path, n)
+        if not path:
+            records = []
+        else:
+            records = load_jsonl(path, n)
         # Estimate max entropy from records to normalize
         max_entropy = 0.0
         for r in records:
@@ -132,12 +159,14 @@ def create_app(jsonl_path: str, model_name: str, max_n: int) -> Flask:
         avg_loss = compute_average_loss(records)
 
         items = [build_spans(r, tokenizer, max_entropy) for r in records]
+        
         return render_template(
             "entropy.html",
             items=items,
             jsonl_path=path,
             model_name=model,
             max_n=n,
+            available_files=available_files,
             accuracy=accuracy,
             correct=correct,
             total=total,
@@ -151,8 +180,8 @@ def create_app(jsonl_path: str, model_name: str, max_n: int) -> Flask:
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize token entropies as colored text")
-    parser.add_argument("--file", type=str, required=True, help="Path to JSONL output from compute_entropy.py")
-    parser.add_argument("--model", type=str, default="mistralai/Mistral-7B-v0.1", help="Tokenizer model to align tokens")
+    parser.add_argument("--file", type=str, required=False, default=None, help="Path to JSONL output from compute_entropy.py. If omitted, use first entropies_*.jsonl in CWD.")
+    parser.add_argument("--model", type=str, required=False, default=None, help="Model name. If omitted, infer from jsonl path.")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--n", type=int, default=20, help="Max samples to display")

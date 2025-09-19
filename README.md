@@ -14,6 +14,15 @@ There are some key limitations of the original approach:
 ```bash
 conda create -n ntp_rl python=3.11
 conda activate ntp_rl
+
+# for quietstar
+git clone git+https://github.com/wise-east/transformers.git@quietstar
+cd transformers
+pip install -e .
+cd ..
+pip install -r requirements-quietstar.txt
+
+# for current version of huggingface transformers where fasttokenizers work
 pip install -r requirements.txt
 ```
 
@@ -24,10 +33,16 @@ pip install -r requirements.txt
 Example: 
 ```bash
 # compute entropy at each token position
-python compute_entropy.py --output entropies_mistral7b.jsonl --split validation --subset en --text-field text --max-length 1024 --batch-size 4 --max-samples 50 --model mistralai/Mistral-7B-v0.1
+python compute_entropy.py --model mistralai/Mistral-7B-v0.1
 
+# for quietstar
+python inference_quietstar.py 
+```
+
+```bash
+# activate the conda environment with current version of huggingface transformers where fasttokenizers work
 # visualize the entropies on a web page. darker color means the token position has higher entropy (i.e., given the text before the highlighted position, the model is more uncertain about predicting the current position).
-python visualize_entropies.py --file entropies_mistral7b.jsonl --model mistralai/Mistral-7B-v0.1 --port 7860 --host 127.0.0.1 --n 20
+python visualize_entropies.py --port 7860 --host 127.0.0.1 --n 20
 ```
 
 ### Workflow 

@@ -28,7 +28,8 @@ class Args:
 
 def parse_args() -> Args:
     parser = argparse.ArgumentParser(description="Compute per-token entropy with a model over C4 samples")
-    parser.add_argument("--output", dest="output_path", type=str, required=True, help="Path to write JSONL results")
+    parser.add_argument("--output", dest="output_path", type=str, default="entropies.jsonl", help="Path to write JSONL results")
+    parser.add_argument("--dataset", type=str, default="allenai/c4", help="Dataset name")
     parser.add_argument("--split", type=str, default="validation", help="Dataset split (e.g., validation)")
     parser.add_argument("--subset", type=str, default="en", help="Dataset subset, e.g., en")
     parser.add_argument("--text-field", type=str, default="text", help="Field name with raw text")
@@ -43,21 +44,7 @@ def parse_args() -> Args:
     parser.add_argument("--trust-remote-code", action="store_true", help="Pass trust_remote_code=True to HF loaders")
     parser.set_defaults(padding=True)
     ns = parser.parse_args()
-    return Args(
-        output_path=ns.output_path,
-        split=ns.split,
-        subset=ns.subset,
-        text_field=ns.text_field,
-        max_length=ns.max_length,
-        batch_size=ns.batch_size,
-        max_samples=ns.max_samples,
-        model_name=ns.model_name,
-        revision=ns.revision,
-        dtype=ns.dtype,
-        device=ns.device,
-        padding=ns.padding,
-        trust_remote_code=ns.trust_remote_code,
-    )
+    return ns
 
 
 def infer_device(device_arg: str) -> torch.device:
@@ -121,18 +108,11 @@ def main() -> None:
     device = infer_device(args.device)
     dtype = infer_dtype(args.dtype)
 
-    # Stream dataset
-    ds = load_dataset("allenai/c4", args.subset, streaming=True, split=args.split)
-    iterator = (row[args.text_field] for row in ds)
-    if args.max_samples is not None:
-        # Create a bounded iterator
-        def take(it, k):
-            for i, x in enumerate(it):
-                if i >= k:
-                    break
-                yield x
+    output_path = args.output_path.replace(".jsonl", f"_{args.model_name.split('/')[-1]}_dataset_{args.dataset.split('/')[-1]}_split_{args.split}_subset_{args.subset}_textfield_{args.text_field}_maxsamples_{args.max_samples}.jsonl")
 
-        iterator = take(iterator, args.max_samples)
+    # Stream dataset
+    ds = load_dataset(args.dataset, args.subset, streaming=True, split=args.split)
+    iterator = [next(iter(ds))[args.text_field] for _ in range(args.max_samples)] 
 
     # Lazy import transformers to avoid overhead if just parsing args
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -153,7 +133,7 @@ def main() -> None:
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         revision=args.revision,
-        dtype=dtype,
+        # dtype=dtype,
         device_map=None,
         trust_remote_code=args.trust_remote_code,
     ).to(device)
@@ -162,9 +142,9 @@ def main() -> None:
     # mistral's max length is 8192
     max_length = min(args.max_length, 8192)   
     logger.info(f"Max length: {max_length}")
-
-    os.makedirs(os.path.dirname(os.path.abspath(args.output_path)), exist_ok=True)
-    with open(args.output_path, "w", encoding="utf-8") as fout:
+    
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as fout:
         for batch_texts in batched(iterator, args.batch_size):
             enc = tokenizer(
                 batch_texts,
@@ -216,7 +196,7 @@ def main() -> None:
                     seq_ent = [0.0] + seq_ent
 
                 tokens = pieces
-
+                
                 # Compute per-sample average loss over predictor positions (exclude padding)
                 nll_seq = nll_trunc[b_idx]
                 nll_predictors = nll_seq[start:last]

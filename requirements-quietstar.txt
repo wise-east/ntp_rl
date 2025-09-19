@@ -1,5 +1,6 @@
-transformers
-tokenizers
+# git+https://github.com/wise-east/transformers.git@quietstar
+# transformers
+# tokenizers
 datasets
 torch
 flask
